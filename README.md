@@ -1,47 +1,70 @@
 # Anamnesis
 
-Prototype of an automated psychiatric intake workflow, modelled on the referral-to-letter flow of virtual consult clinics:
+Prototype of an automated psychiatric intake workflow:
 
 1. **Clinician setup** – create an intake from a referral, with the referral letter and medication list.
-2. **Patient intake** – consent screen, then a live AI interviewer that asks one question at a time across six sections.
-3. **Draft consult note** – every sentence is tagged with its source (transcript turn, referral, medication list, questionnaire) and checked against it; unmatched sentences are flagged.
-4. **Letters** – GP consultation letter, plain-language patient summary and a work letter, drafted only from the approved note and the psychiatrist's plan.
+2. **Patient intake** – consent, three validated questionnaires, then ten structured history sections and a review page.
+3. **Intake summary** – built directly from the answers (no AI). Every sentence is tagged with the question it came from, plus rule-based prompts, items to clarify, and what the patient left for the visit.
+4. **Letters** – GP consultation letter, plain-language patient summary and a work letter, drafted by AI from the approved summary and the psychiatrist's plan.
 
 > **Prototype only. Use fictional patients.** No real health information. Not PIPEDA-compliant, not hosted in Canada, no authentication, no audit log.
 
-## Interview design
+## Patient flow
 
-- **Two-layer modules.** 11 core modules every patient gets (story, mood, safety, anxiety, sleep, substances, past care, health and medications, family, life and work, goals) plus triggered modules added when the patient raises something (highs and energy, unusual experiences, difficult experiences, focus since childhood, eating, memory).
-- **Safety is core, not triggered.** Asked right after mood, or earlier if the patient mentions hopelessness or death.
-- **Deterministic safety net.** Independently of the model, the app shows crisis resources (911, 9-8-8, 1-800-784-2433) and flags the intake "Needs review now" when the patient's words match a self-harm pattern, PHQ-9 item 9 is above 0, the C-SSRS is moderate or high, the safety topic is skipped, or the patient presses "I need help now".
-- **Screening before the conversation.** After consent the patient completes the PHQ-9, GAD-7 and C-SSRS screener (Columbia Lighthouse Project) in validated wording, scored in code. The C-SSRS branches as published (questions 3–5 only if question 2 is yes; the 3-month follow-up only if question 6 is yes) and is triaged as low (Q1 or Q2), moderate (Q3, or Q6 more than 3 months ago) or high (Q4, Q5, or Q6 within 3 months). Moderate or high flags the intake for review; high shows crisis resources before the conversation. The interviewer receives all results and does not re-ask them.
-- **Interview rules** (see `ENGINE_RULES` in `index.html`): one question per turn, no re-asking, loss of interest asked separately from low mood, clarify ambiguous answers, never attribute unsaid statements, introduce referral facts as such, log contradictions, red-flag follow-ups (e.g. choking at night → sleep apnea questions), and the mania module is gated on first establishing a distinct episode.
-- **Coverage check.** The app refuses to close the interview while any core module is unfinished.
-- **Patient controls.** Skip a topic (defer to the visit), pause and resume, text or dictation.
+**Questionnaires** (validated wording, scored in code)
+
+| Questionnaire | Notes |
+| --- | --- |
+| PHQ-9 | Item 9 above 0 raises a safety alert |
+| GAD-7 | |
+| C-SSRS screener | Published branching (Q3–5 only if Q2 is yes; 3-month follow-up only if Q6 is yes). Triage: low = Q1 or Q2; moderate = Q3, or Q6 more than 3 months ago; high = Q4, Q5, or Q6 within 3 months. Moderate or high flags the intake; high shows crisis resources first. |
+
+**History sections**
+
+1. About you – preferred name, pronouns, date of birth, relationship, living situation, dependants
+2. What brings you here – concerns in the patient's words, onset, precipitants, impact, what they have tried
+3. Mental health history – previous diagnoses, previous care, admissions, suicide attempts, self-harm, ECT/rTMS/ketamine
+4. Past mental health medications – medication, highest dose, duration, response, side effects or reason stopped
+5. Current medications and allergies – pre-filled from the referral medication list for the patient to confirm, with adherence
+6. Physical health – conditions, head injury, surgeries, pregnancy, family doctor
+7. Alcohol, drugs and other substances – AUDIT-C (scored), cannabis, tobacco, caffeine, other drugs, treatment, concern
+8. Family history
+9. Life, work and background – upbringing, education, work status and stressors, supports, finances, legal, trauma (yes/no only), firearms
+10. What matters to you – goals and questions
+
+Any questionnaire or section can be left for the visit ("I'd rather discuss this in person"). Sensitive yes/no questions have the same option. Answers save after each page, and the patient can pause and resume. Crisis numbers (911, 9-8-8, 1-800-784-2433) are on every page; "I need help now", a moderate or high C-SSRS, PHQ-9 item 9, or self-harm wording in free text flags the intake "Needs review now".
+
+## Summary rules
+
+The summary is generated by `buildNote()` in `index.html` from the answers alone.
+
+- **For the psychiatrist to consider** (prompts, not diagnoses): PHQ-9 or GAD-7 of 10 or more, C-SSRS moderate or high, AUDIT-C of 3 or more, non-prescribed drug use, two or more past medication trials with limited benefit, medical conditions that affect mood or cognition, possible sleep apnea symptoms in free text, pregnancy or breastfeeding, and personal or family bipolar history.
+- **To clarify at the visit**: referral medications the patient did not list, adherence problems, PHQ-9 item 9 or self-harm wording with a negative C-SSRS, and a reported attempt with C-SSRS question 6 answered no.
+- **Not covered**: skipped questionnaires and sections, and questions the patient chose to discuss in person.
 
 ## Running it
 
-### In a browser (GitHub Pages)
+### In a browser (Vercel, GitHub Pages or locally)
 
-1. Open **https://brycycling.github.io/anamesis/**
-2. Go to **AI setup**, paste an Anthropic API key (from console.anthropic.com) and click **Save and test**.
-3. Click **Load sample case** to try the note and letters, or **New intake** to run an interview.
-
-In this mode the page calls Anthropic's API directly from the browser with your key, stores intakes in the browser's local storage, and uses Chrome's speech recognition for dictation. The key and intakes never leave that browser except for the API calls. Don't save a key on a shared computer. Running locally works too: serve the folder (`python3 -m http.server`) and open `http://localhost:8000`.
+Open the page. Intakes are saved in the browser's local storage. **Setup → Load sample case** adds a completed fictional intake (Morgan Tse). Everything works without a key except letter drafting; to turn that on, paste an Anthropic API key under **Setup** (stored in that browser only). Locally: `python3 -m http.server` in this folder, then open `http://localhost:8000`.
 
 ### Inside Claude
 
-Published as a claude.ai Artifact, the same file uses Artifact runtime capabilities instead: `sample` (AI on the viewer's Claude account), `db` (shared storage, collection `intakes`) and `dictation`. No API key is needed there.
+Published as a claude.ai Artifact, the same file uses Artifact runtime capabilities instead: `db` (shared storage, collection `intakes`), `sample` (letter drafting on the viewer's Claude account) and `dictation` (the clinician's plan).
 
 ### Production
 
-Neither mode is suitable for real patients. A production version needs a backend that holds the API key, authenticated per-patient links, and a Canadian-hosted database with encryption and audit logging.
+Neither mode is suitable for real patients. A production version needs authenticated per-patient links, a Canadian-hosted database with encryption and audit logging, and a backend that holds any API key.
 
 ## Files
 
 - `index.html` – the whole app (HTML, CSS, JS).
-- `seed/demo-morgan.json` – a completed fictional intake (Morgan Tse) for trying the note and letters without running an interview.
+- `seed/demo-morgan.json` – a completed fictional intake for trying the summary and letters.
+
+## Licensing notes
+
+PHQ-9 and GAD-7 are free to reproduce. The AUDIT-C is from the WHO AUDIT. The C-SSRS is free for clinical use; the Columbia Lighthouse Project asks commercial products to request permission.
 
 ## Not yet built
 
-Authentication and per-patient links; clinician alert paging with a response-time commitment; Canadian data residency, encryption at rest and audit logging; EMR, MSP billing and fax integration; visit recording and scribe; sentence-level edit history; more questionnaires (ASRS, PCL-5, AUDIT; full C-SSRS for follow-up; check licensing for others such as the ISI); teen version; occupational modules (functional impairment, return-to-work, disability forms) and geriatric modules (cognitive screen, collateral from family).
+Authentication and per-patient links; clinician alert paging with a response-time commitment; Canadian data residency, encryption at rest and audit logging; EMR, MSP billing and fax integration; more questionnaires (ASRS, PCL-5, full AUDIT; check licensing for others such as the ISI); teen version; occupational modules (functional impairment, return-to-work, disability forms) and geriatric modules (cognitive screen, collateral from family).
