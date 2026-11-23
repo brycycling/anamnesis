@@ -186,7 +186,8 @@ mark{background:var(--warn-soft);color:inherit;padding:0 2px;border-radius:3px;b
 .feat .card{gap:4px}
 .check{display:flex;gap:10px;align-items:flex-start;font-size:.95rem}
 .check input{margin-top:4px;width:18px;height:18px;accent-color:var(--accent)}
-.progress{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}
+.progress{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+.qopts.yn{grid-template-columns:repeat(2,minmax(0,140px))}
 .progress div{display:flex;flex-direction:column;gap:5px;font-size:.74rem;color:var(--muted);min-width:0}
 .progress div span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .progress div i{height:4px;border-radius:2px;background:var(--line);position:relative;overflow:hidden}
@@ -241,6 +242,7 @@ const MODULES = [
 const MOD = Object.fromEntries(MODULES.map(m=>[m.id,m]));
 const CORE = MODULES.filter(m=>m.kind==='core').map(m=>m.id);
 const STEPS = [
+ {name:'Questionnaires', mods:[], q:true},
  {name:'Your story', mods:['story']},
  {name:'Mood and safety', mods:['mood','safety','anxiety']},
  {name:'Sleep and substances', mods:['sleep','substances']},
@@ -274,6 +276,27 @@ const GAD7 = {id:'gad7', name:'GAD-7', stem:'Over the last 2 weeks, how often ha
  diff:'If you checked any problems, how difficult have they made it for you to do your work, take care of things at home, or get along with other people?',
  bands:[[0,'Minimal'],[5,'Mild'],[10,'Moderate'],[15,'Severe']], max:21};
 const QS = {phq9:PHQ9, gad7:GAD7};
+/* C-SSRS Screen Version (The Columbia Lighthouse Project). Item wording as published; n:7 is the follow-up to item 6. */
+const CSSRS = {name:'C-SSRS screener', stem:'These questions ask about thoughts of death and suicide. Many people who feel low have thoughts like these. Your answers help your psychiatrist understand how you are doing.', items:[
+ {n:1, when:'In the past month', q:'Have you wished you were dead or wished you could go to sleep and not wake up?'},
+ {n:2, q:'Have you actually had any thoughts of killing yourself?'},
+ {n:3, q:'Have you been thinking about how you might do this?', hint:'For example, "I thought about taking an overdose but I never made a specific plan as to when, where or how I would actually do it, and I would never go through with it."', if:a=>a[2]},
+ {n:4, q:'Have you had these thoughts and had some intention of acting on them?', hint:'As opposed to "I have the thoughts but I definitely will not do anything about them."', if:a=>a[2]},
+ {n:5, q:'Have you started to work out or worked out the details of how to kill yourself? Do you intend to carry out this plan?', if:a=>a[2]},
+ {n:6, when:'In your lifetime', q:'Have you ever done anything, started to do anything, or prepared to do anything to end your life?', hint:"For example: collected pills, obtained a gun, gave away valuables, wrote a will or suicide note, took out pills but didn't swallow any, held a gun but changed your mind or it was grabbed from your hand, went to the roof but didn't jump; or actually took pills, tried to shoot yourself, cut yourself, tried to hang yourself."},
+ {n:7, q:'Was this within the past 3 months?', if:a=>a[6]}
+]};
+const cssrsVisible = a => CSSRS.items.filter(i=>!i.if || i.if(a));
+function cssrsLevel(a){ if(a[4] || a[5] || (a[6] && a[7])) return 'high'; if(a[3] || (a[6] && !a[7])) return 'moderate'; if(a[1] || a[2]) return 'low'; return 'none'; }
+const CSSRS_LABEL = {none:'No suicidal ideation or behaviour reported', low:'Low risk: ideation without method, intent or plan', moderate:'Moderate risk', high:'High risk'};
+const cssrsSummary = r => cssrsVisible(r.a).map(i=>`${i.n===7?'Q6 in past 3 months':'Q'+i.n}: ${r.a[i.n]?'Yes':'No'}`).join('; ');
+function cssrsText(it){
+  const r = it.q?.cssrs;
+  if(r) return `C-SSRS screener: ${CSSRS_LABEL[r.level]}. ${cssrsVisible(r.a).map(i=>`"${i.q}" ${r.a[i.n]?'Yes':'No'}`).join('; ')}`;
+  return (it.qSkipped||[]).includes('cssrs') ? 'C-SSRS screener: patient chose to discuss in person' : 'C-SSRS screener: not completed';
+}
+const SCREENS = ['phq9','gad7','cssrs'];
+const nextScreen = it => SCREENS.find(k=>!it.q?.[k] && !(it.qSkipped||[]).includes(k));
 const QTRIGGER = {mood:'phq9', anxiety:'gad7'};
 const band = (q,t)=>{let b=q.bands[0][1]; for(const [min,l] of q.bands) if(t>=min) b=l; return b;};
 
@@ -302,10 +325,10 @@ How to ask:
 - Keep each module short, usually 2 to 6 questions. Aim to finish in about 35 to 55 patient answers in total.
 - Work through modules in plan order. Insert a triggered module right after the current one.
 - Turns marked SYS are app events (a skipped topic, questionnaire scores). Use them, never quote them. A module the patient skipped stays "deferred"; do not return to it.
-- When the mood module finishes, the app shows the PHQ-9; when anxiety finishes, the GAD-7. Do not ask those questionnaire items yourself.
+- Before this conversation the patient completed the PHQ-9, GAD-7 and the C-SSRS screener (results under QUESTIONNAIRES). Do not re-ask their items as a checklist. Use them to choose what to explore: onset, course, examples and impact of what they endorsed. If one was skipped, cover that ground in conversation.
 
 Safety:
-- The safety module is required for every patient. Ask it right after the mood module, or earlier if the patient mentions hopelessness, death or self-harm. Ask directly and calmly, for example "Have you had thoughts that you'd be better off dead, or of ending your life?" Then, as relevant: intent, plan, past attempts, self-harm, thoughts of harming others, access to firearms or saved-up medication, what keeps them going.
+- The safety module is required for every patient. Ask it right after the mood module, or earlier if the patient mentions hopelessness, death or self-harm. If the C-SSRS was completed, do not repeat its questions: acknowledge it briefly and cover only what it does not: details and timing of any past attempt (if C-SSRS question 6 was yes), self-harm without intent to die, thoughts of harming others, access to firearms or saved-up medication, and what keeps them going. If the C-SSRS was skipped, ask directly and calmly yourself, for example "Have you had thoughts that you'd be better off dead, or of ending your life?", then intent, plan and past attempts as well.
 - risk.level scale: "none" (denies all), "low" (passive thoughts only, no intent or plan), "moderate" (active thoughts without intent or plan, or a past attempt), "high" (intent or a plan, or a recent attempt or self-harm), "imminent" (intends to act soon, has means at hand, or is in danger now).
 - If the level is "imminent", your reply must tell the patient to call 911 or go to the nearest emergency department now, or call or text 9-8-8 any time, and set done to true.
 
@@ -327,7 +350,7 @@ Every statement MUST cite at least one source:
 - {"kind":"turn","turn":<index>,"quote":"exact words copied from that turn, max 20 words"}
 - {"kind":"referral","quote":"exact words copied from the referral letter"}
 - {"kind":"meds","quote":"exact words copied from the medication list"}
-- {"kind":"phq9"} or {"kind":"gad7"} for questionnaire results
+- {"kind":"phq9"}, {"kind":"gad7"} or {"kind":"cssrs"} for questionnaire results
 Quotes must be copied character for character so they can be checked. Prefer the patient's own turns over the referral when both exist. If the patient and the referral disagree, say so and cite both.
 Contradictions and unclear answers go in "unresolved" rather than being smoothed over. Topics the interview never covered or the patient deferred go in "notCovered".
 
@@ -402,7 +425,7 @@ function route(){
   else if(h==='new'){ S.view='new'; }
   else if(h==='setup' && STANDALONE){ S.view='setup'; }
   else if((m=h.match(/^i-([a-z0-9-]+)$/))){ if(S.id!==m[1]){ S.tab='overview'; S.src=null; } S.view='detail'; S.id=m[1]; }
-  else if((m=h.match(/^p-([a-z0-9-]+)$/))){ if(S.view!=='patient' || S.id!==m[1]){ S.pt=null; S.ptPhase=null; S.ptErr=null; S.crisis=false; S.pendingQ=null; S.pendingReply=null; } S.view='patient'; S.id=m[1]; }
+  else if((m=h.match(/^p-([a-z0-9-]+)$/))){ if(S.view!=='patient' || S.id!==m[1]){ S.pt=null; S.ptPhase=null; S.ptErr=null; S.crisis=false; S.pendingQ=null; S.pendingReply=null; S.qDraft=null; S.cDraft=null; S.cssrsAfter=null; S.lastScreen=null; } S.view='patient'; S.id=m[1]; }
   else { S.view='list'; }
   render();
   window.scrollTo(0,0);
@@ -453,7 +476,7 @@ function renderList(v){
   }
   v.insertAdjacentHTML('beforeend', `<div class="tablewrap"><table class="list"><thead><tr><th>Patient</th><th>Referred by</th><th>Status</th><th>Safety</th><th>Scores</th><th>Updated</th></tr></thead><tbody>${rows.map(it=>{
     const st = STATUS[it.status]||[it.status,''], rk = RISKPILL[it.risk?.level] , urgent = it.status==='urgent' || riskRank(it.risk?.level)>=3;
-    const sc = [it.q?.phq9 ? 'PHQ-9 '+it.q.phq9.total : '', it.q?.gad7 ? 'GAD-7 '+it.q.gad7.total : ''].filter(Boolean).join(' · ');
+    const sc = [it.q?.phq9 ? 'PHQ-9 '+it.q.phq9.total : '', it.q?.gad7 ? 'GAD-7 '+it.q.gad7.total : '', it.q?.cssrs ? 'C-SSRS '+it.q.cssrs.level : ''].filter(Boolean).join(' · ');
     return `<tr class="click ${urgent?'urgent':''}" data-id="${esc(it.id)}"><td><b>${esc(it.patient?.name)}</b><div class="small muted">${esc([it.patient?.age, it.patient?.pronouns].filter(Boolean).join(' · '))}</div></td>
       <td>${esc(it.referrer||'—')}</td><td><span class="pill ${st[1]}">${esc(st[0])}</span></td>
       <td>${rk && it.risk?.level && (it.risk.level!=='none' || (it.transcript||[]).length) ? `<span class="pill ${rk[1]}">${esc(rk[0])}</span>` : '<span class="muted small">Not assessed</span>'}${(it.risk?.alerts||[]).length?` <span class="small muted">${it.risk.alerts.length} alert${it.risk.alerts.length>1?'s':''}</span>`:''}</td>
@@ -503,7 +526,7 @@ function renderDetail(v){
   const it = S.intakes[S.id];
   if(!it){ v.insertAdjacentHTML('beforeend', S.loaded ? `<div class="card empty"><h2>This intake isn't here</h2><p class="muted">It may have been removed.</p><a class="btn" href="#intakes">Back to intakes</a></div>` : `<div class="card"><span class="thinking"><i></i><i></i><i></i></span></div>`); return; }
   const st = STATUS[it.status]||[it.status,''], rk = RISKPILL[it.risk?.level||'none'];
-  const assessed = (it.transcript||[]).some(t=>t.m==='safety') || it.q?.phq9;
+  const assessed = (it.transcript||[]).some(t=>t.m==='safety') || it.q?.phq9 || it.q?.cssrs;
   v.insertAdjacentHTML('beforeend', `<div class="dhead">
     <div style="min-width:0"><p class="label">Intake · referred by ${esc(it.referrer||'—')}</p><h1>${esc(it.patient?.name)}</h1>
     <p class="muted">${esc([it.patient?.age && it.patient.age+' years', it.patient?.pronouns, 'for '+(it.clinician||'')].filter(Boolean).join(' · '))}</p></div>
@@ -544,7 +567,8 @@ function tabOverview(tb, it){
       <div class="card"><h2>Questionnaires</h2>${['phq9','gad7'].map(k=>{ const r=it.q?.[k], Q=QS[k];
         return r ? `<div class="score"><b>${r.total}</b><span class="muted">/ ${Q.max}</span><span>${esc(Q.name)} · ${esc(band(Q,r.total))}</span></div>${k==='phq9'?`<p class="small ${r.items[8]>0?'':'muted'}">Item 9: ${esc(OPTS4[r.items[8]])}${r.items[8]>0?' — flagged':''}</p>`:''}${r.diff?`<p class="small muted">Difficulty: ${esc(r.diff)}</p>`:''}`
         : `<p class="muted">${esc(Q.name)} not yet completed.</p>`; }).join('')}
-        <p class="small muted">PHQ-9 and GAD-7 developed by Drs. Spitzer, Williams, Kroenke and colleagues; free to reproduce.</p></div>
+        ${it.q?.cssrs ? `<div class="row"><span class="pill ${RISKPILL[it.q.cssrs.level][1]}">C-SSRS</span><span>${esc(CSSRS_LABEL[it.q.cssrs.level])}</span></div><p class="small muted">${esc(cssrsSummary(it.q.cssrs))}</p>` : `<p class="muted">C-SSRS screener ${(it.qSkipped||[]).includes('cssrs')?'skipped: patient chose to discuss in person':'not yet completed'}.</p>`}
+        <p class="small muted">PHQ-9 and GAD-7: Drs. Spitzer, Williams, Kroenke and colleagues, free to reproduce. C-SSRS screener: The Columbia Lighthouse Project.</p></div>
       <div class="card"><h2>Progress</h2><ul class="timeline">${(it.timeline||[]).map(e=>`<li><span>${esc(e.label)}</span><span>${esc(fmt(e.ts))}</span></li>`).join('')}</ul></div>
     </div>
   </div>`);
@@ -561,10 +585,10 @@ function tabTranscript(tb, it){
 }
 
 /* ---------- Note ---------- */
-function srcLabel(s){ return s.kind==='turn' ? 'T'+s.turn : s.kind==='referral' ? 'Referral' : s.kind==='meds' ? 'Med list' : s.kind==='phq9' ? 'PHQ-9' : s.kind==='gad7' ? 'GAD-7' : '?'; }
+function srcLabel(s){ return s.kind==='turn' ? 'T'+s.turn : s.kind==='referral' ? 'Referral' : s.kind==='meds' ? 'Med list' : s.kind==='phq9' ? 'PHQ-9' : s.kind==='gad7' ? 'GAD-7' : s.kind==='cssrs' ? 'C-SSRS' : '?'; }
 function verifySource(it, s){
   if(!s || !s.kind) return false;
-  if(s.kind==='phq9' || s.kind==='gad7') return !!it.q?.[s.kind];
+  if(s.kind==='phq9' || s.kind==='gad7' || s.kind==='cssrs') return !!it.q?.[s.kind];
   let text = '';
   if(s.kind==='turn'){ const t=(it.transcript||[])[+s.turn]; if(!t) return false; text=t.t; }
   else if(s.kind==='referral') text = it.referralText;
@@ -594,6 +618,7 @@ RISK (from interview): ${it.risk?.level||'none'} — ${it.risk?.summary||''}
 CONTRADICTIONS FLAGGED DURING INTERVIEW: ${(it.contradictions||[]).map(c=>c.text+' (turns '+(c.turns||[]).join(',')+')').join('; ')||'none'}
 QUESTIONNAIRES:
 ${qs}
+${cssrsText(it)}
 
 REFERRAL LETTER:
 <<<
@@ -676,6 +701,7 @@ function srcPanelHTML(it){
   if(s.kind==='turn'){ const t=(it.transcript||[])[s.turn]; title=`Turn ${s.turn} · ${t? (t.r==='pt'?'Patient':t.r==='ai'?'Assistant':'App') : 'missing'}`; body=t?t.t:'This turn does not exist.'; }
   else if(s.kind==='referral'){ title='Referral letter'; body=it.referralText||''; }
   else if(s.kind==='meds'){ title='Medication list'; body=it.medsText||''; }
+  else if(s.kind==='cssrs'){ const r=it.q?.cssrs; title='C-SSRS screener'; body = r ? cssrsVisible(r.a).map(i=>`${i.q} — ${r.a[i.n]?'Yes':'No'}`).join('\n')+`\n${CSSRS_LABEL[r.level]}` : 'Not completed.'; }
   else { const r=it.q?.[s.kind]; title=QS[s.kind].name; body = r ? QS[s.kind].items.map((q,i)=>`${i+1}. ${q} — ${OPTS4[r.items[i]]}`).join('\n')+`\nTotal ${r.total} (${band(QS[s.kind],r.total)})` : 'Not completed.'; }
   let html = esc(body);
   if(s.quote){ const i = body.toLowerCase().indexOf(String(s.quote).toLowerCase()); if(i>=0) html = esc(body.slice(0,i))+'<mark>'+esc(body.slice(i,i+s.quote.length))+'</mark>'+esc(body.slice(i+s.quote.length)); }
@@ -756,10 +782,11 @@ function renderPatient(app){
     if(!src){ app.innerHTML = `<div class="pt-page"><div class="pt-col"><div class="card empty">${S.loaded?`<h2>This intake link isn't valid</h2><p class="muted">Check the link from your clinic.</p><a class="btn" href="#intakes">Back to clinician view</a>`:`<span class="thinking"><i></i><i></i><i></i></span>`}</div></div></div>`; return; }
     S.pt = clone(src);
     if(!(S.pt.timeline||[]).some(e=>e.label==='Link opened by patient')){ S.pt.timeline = addEvent(S.pt,'Link opened by patient'); persist(id,{timeline:S.pt.timeline}); }
-    S.ptPhase = (S.pt.transcript||[]).length ? (isComplete(S.pt) || riskRank(S.pt.risk?.level)>=4 ? 'done' : 'chat') : 'welcome';
+    S.ptPhase = (S.pt.transcript||[]).length ? (isComplete(S.pt) || riskRank(S.pt.risk?.level)>=4 ? 'done' : 'chat') : (S.pt.consentedAt ? 'screen' : 'welcome');
   }
   const it = S.pt;
   if(S.ptPhase==='welcome') return ptWelcome(app, it);
+  if(S.ptPhase==='screen') return ptScreen(app, it);
   if(S.ptPhase==='paused') return ptPaused(app, it);
   if(S.ptPhase==='done') return ptDone(app, it);
   ptChat(app, it);
@@ -774,7 +801,7 @@ function ptWelcome(app, it){
   app.innerHTML = `<div class="pt-page"><div class="pt-col">${ptTop(it)}
     <div class="pt-hero"><h1>Let's prepare for your appointment</h1><p>We'll ask about what's been happening, your health, your history and what matters to you. ${esc(it.clinician)} reads it all before you meet, so your visit can focus on your care.</p></div>
     <div class="feat">
-      <div class="card"><h3>About 30–45 minutes</h3><p class="small muted">Answer in your own words. There's no rush.</p></div>
+      <div class="card"><h3>About 40 minutes</h3><p class="small muted">Three short questionnaires first, then a conversation in your own words.</p></div>
       <div class="card"><h3>Pause any time</h3><p class="small muted">Your progress saves after every answer.</p></div>
       <div class="card"><h3>Skip what you'd rather say in person</h3><p class="small muted">Any topic can wait for the visit.</p></div>
     </div>
@@ -789,18 +816,90 @@ function ptWelcome(app, it){
   </div></div>`;
   $('#agree').onchange = e=>$('#begin').disabled = !e.target.checked;
   $('#begin').onclick = ()=>{
-    const first = `Hi ${(it.patient?.name||'').replace(/\s*\(.*\)$/,'').split(' ')[0]}. I'm the intake assistant for ${it.clinician}'s clinic. In your own words, what's been happening that led to this referral?`;
-    it.transcript = [{r:'ai', t:first, m:'story', ts:now()}];
-    it.modules = Object.assign({}, it.modules, {story:'active'}); it.current='story';
-    it.timeline = addEvent(it,'Interview started');
-    persist(it.id, {transcript:it.transcript, modules:it.modules, current:'story', status: it.status==='sent'?'in_progress':it.status, timeline:it.timeline, updatedAt:now()});
-    it.status = it.status==='sent'?'in_progress':it.status;
-    S.ptPhase='chat'; render();
+    it.consentedAt = now(); it.status = it.status==='sent' ? 'in_progress' : it.status;
+    it.timeline = addEvent(it,'Questionnaires started');
+    persist(it.id, {consentedAt:it.consentedAt, status:it.status, timeline:it.timeline, updatedAt:now()});
+    S.ptPhase='screen'; render();
+  };
+}
+function startChat(it){
+  const fname = (it.patient?.name||'').replace(/\s*\(.*\)$/,'').split(' ')[0];
+  const first = `Thanks${fname?', '+fname:''}. I'm the intake assistant for ${it.clinician}'s clinic. Now, in your own words, what's been happening that led to this referral?`;
+  it.transcript = [{r:'ai', t:first, m:'story', ts:now()}];
+  it.modules = Object.assign({}, it.modules, {story:'active'}); it.current='story';
+  it.timeline = addEvent(it,'Interview started');
+  persist(it.id, {transcript:it.transcript, modules:it.modules, current:'story', timeline:it.timeline, updatedAt:now()});
+  S.ptPhase='chat'; render();
+}
+
+/* ---------- Screening questionnaires (before the conversation) ---------- */
+function ptScreen(app, it){
+  const k = nextScreen(it);
+  if(!k && !S.cssrsAfter){ startChat(it); return; }
+  const done = SCREENS.filter(x=>it.q?.[x] || (it.qSkipped||[]).includes(x)).length;
+  let body;
+  if(!k){
+    const high = riskRank(S.cssrsAfter) >= 3;
+    body = (high ? CRISIS_HTML : `<div class="card"><h3>Thank you for answering those questions</h3><p>Your psychiatrist will go over them with you. If these thoughts get stronger, or you feel you might act on them, call or text <b>9-8-8</b> any time, or call <b>911</b> or go to the nearest emergency department.</p></div>`)
+      + `<div class="row"><div class="spacer"></div><button class="btn primary" id="toChat">Continue to the conversation</button></div>`;
+  } else if(k==='cssrs') body = cssrsCardHTML();
+  else { if(!S.qDraft || S.qDraft.qid!==k) S.qDraft = {qid:k, items:Array(QS[k].items.length).fill(null), diff:null}; body = qcardHTML(k); }
+  app.innerHTML = `<div class="pt-page"><div class="pt-col">${ptTop(it)}
+    <div class="stack" style="gap:6px"><p class="label">Questionnaires · ${Math.min(done + (k?1:0), 3)} of 3</p>
+      <div class="progress" style="grid-template-columns:repeat(3,minmax(0,1fr))">${SCREENS.map((x,i)=>`<div class="${x===k?'cur':''}"><i><b style="transform:scaleX(${i<done?1:0})"></b></i><span>${esc(x==='cssrs'?'C-SSRS':QS[x].name)}</span></div>`).join('')}</div></div>
+    ${S.crisis && k ? CRISIS_HTML : ''}${body}
+    <div class="row"><button class="btn ghost sm" id="sPause">Pause</button><button class="btn ghost sm" id="sHelp">I need help now</button></div>
+    <p class="small muted">In crisis? Call or text 9-8-8. Emergency: 911.</p>
+  </div></div>`;
+  if(!k) $('#toChat').onclick = ()=>{ S.crisis = S.crisis || riskRank(S.cssrsAfter) >= 3; S.cssrsAfter = null; startChat(it); };
+  else if(k==='cssrs') wireCssrs(it);
+  else wireQ(k, 'screen');
+  $('#sPause').onclick = ()=>{ S.ptPhase='paused'; render(); };
+  $('#sHelp').onclick = ()=>{ S.crisis = true; if(!k) S.cssrsAfter = 'imminent'; addAlert(it,'Patient button','Patient opened crisis help during the questionnaires'); render(); };
+  if(S.lastScreen !== (k||'after')){ S.lastScreen = k||'after'; window.scrollTo(0,0); }
+}
+function saveScreenQ(qid, d){
+  const it = S.pt, total = d.items.reduce((a,b)=>a+b,0), diff = d.diff===null ? '' : DIFF[d.diff];
+  it.q = Object.assign({}, it.q, {[qid]:{items:d.items.slice(), total, diff, ts:now()}});
+  persist(it.id, {q:it.q, updatedAt:now()});
+  if(qid==='phq9' && d.items[8]>0) addAlert(it,'PHQ-9 item 9',`Scored ${d.items[8]} (${OPTS4[d.items[8]]})`);
+  S.qDraft = null; render();
+}
+function skipScreen(qid){
+  const it = S.pt; it.qSkipped = (it.qSkipped||[]).concat([qid]);
+  S.qDraft = null; S.cDraft = null;
+  persist(it.id, {qSkipped:it.qSkipped, updatedAt:now()}); render();
+}
+function cssrsCardHTML(){
+  const a = S.cDraft || (S.cDraft = {});
+  const vis = cssrsVisible(a), left = vis.filter(i=>a[i.n]===undefined).length;
+  return `<div class="qcard" id="ccard"><div><p class="label">C-SSRS screener · validated questionnaire</p><h3 style="margin-top:4px">${esc(CSSRS.stem)}</h3></div>
+    ${vis.map(i=>`<div class="qitem">${i.when?`<span class="label">${esc(i.when)}</span>`:''}<span>${esc(i.q)}</span>${i.hint?`<span class="small muted">${esc(i.hint)}</span>`:''}
+      <div class="qopts yn">${[['Yes',true],['No',false]].map(([l,v])=>`<button data-n="${i.n}" data-v="${v}" class="${a[i.n]===v?'on':''}" aria-pressed="${a[i.n]===v}">${l}</button>`).join('')}</div></div>`).join('')}
+    <div class="row"><button class="btn ghost sm" id="cskip">I'd rather discuss this in person</button><div class="spacer"></div><span class="small muted">${left?left+' left':''}</span><button class="btn primary" id="csubmit" ${left?'disabled':''}>Submit</button></div></div>`;
+}
+function wireCssrs(it){
+  $$('#ccard button[data-n]').forEach(b=>b.onclick=()=>{
+    const a = S.cDraft; a[+b.dataset.n] = b.dataset.v==='true';
+    CSSRS.items.forEach(i=>{ if(i.if && !i.if(a)) delete a[i.n]; });
+    const y = window.scrollY; render(); window.scrollTo(0, y);
+  });
+  $('#cskip').onclick = ()=>skipScreen('cssrs');
+  $('#csubmit').onclick = ()=>{
+    const a = Object.assign({}, S.cDraft); CSSRS.items.forEach(i=>{ if(a[i.n]===undefined) a[i.n]=false; });
+    const level = cssrsLevel(a), r = {a, level, ts:now()};
+    it.q = Object.assign({}, it.q, {cssrs:r});
+    const risk = Object.assign({level:'none', summary:'', alerts:[]}, it.risk);
+    if(riskRank(level) >= riskRank(risk.level)){ risk.level = level; risk.summary = 'C-SSRS screener: ' + CSSRS_LABEL[level] + '.'; }
+    it.risk = risk;
+    persist(it.id, {q:it.q, risk:it.risk, updatedAt:now()});
+    if(riskRank(level) >= 2) addAlert(it, 'C-SSRS screener', CSSRS_LABEL[level] + ' (' + cssrsSummary(r) + ')');
+    S.cDraft = null; S.cssrsAfter = level==='none' ? null : level; render();
   };
 }
 function ptPaused(app, it){
   app.innerHTML = `<div class="pt-page"><div class="pt-col">${ptTop(it)}<div class="card empty"><h2>Your progress is saved</h2><p class="muted">Come back any time with the same link and you'll pick up where you left off.</p><button class="btn primary" id="resume">Resume now</button></div></div></div>`;
-  $('#resume').onclick=()=>{ S.ptPhase='chat'; render(); };
+  $('#resume').onclick=()=>{ S.ptPhase = (it.transcript||[]).length ? 'chat' : 'screen'; render(); };
 }
 function ptDone(app, it){
   const imminent = riskRank(it.risk?.level)>=4;
@@ -814,7 +913,7 @@ function ptDone(app, it){
 function progressHTML(it){
   const curStep = STEPS.findIndex(s=>s.mods.includes(it.current));
   return `<div class="progress" aria-label="Intake progress">${STEPS.map((s,i)=>{
-    const f = s.mods.filter(m=>['done','deferred'].includes(it.modules?.[m])).length / s.mods.length;
+    const f = s.q ? 1 : s.mods.filter(m=>['done','deferred'].includes(it.modules?.[m])).length / s.mods.length;
     return `<div class="${i===curStep?'cur':''}"><i><b style="transform:scaleX(${f})"></b></i><span>${esc(s.name)}</span></div>`; }).join('')}</div>`;
 }
 function ptChat(app, it){
@@ -877,7 +976,7 @@ function enginePrompt(it, extra){
   const tx = it.transcript.map((t,i)=>`[${i} ${t.r==='pt'?'PT':t.r==='ai'?'AI':'SYS'} ${t.m||''}] ${t.t}`).join('\n');
   const plan = Object.entries(it.modules).map(([k,s])=>`${k} | ${MOD[k]?.name} | ${MOD[k]?.kind} | ${s} | covers: ${MOD[k]?.cover}`).join('\n');
   const off = MODULES.filter(m=>m.kind==='triggered' && !it.modules[m.id]).map(m=>`${m.id} (${m.name}): ${m.cover}`).join('\n');
-  const qs = ['phq9','gad7'].map(k=>it.q?.[k] ? `${QS[k].name} done: total ${it.q[k].total}${k==='phq9'?`, item 9 = ${it.q[k].items[8]}`:''}` : `${QS[k].name} not done`).join('; ');
+  const qs = ['phq9','gad7'].map(k=>it.q?.[k] ? `${QS[k].name} total ${it.q[k].total} (${band(QS[k],it.q[k].total)}). ${QS[k].items.map((q,i)=>`"${q}": ${OPTS4[it.q[k].items[i]]}`).join('; ')}` : ((it.qSkipped||[]).includes(k) ? `${QS[k].name}: patient chose to discuss in person` : `${QS[k].name}: not done`)).join('\n');
   const pAns = it.transcript.filter(t=>t.r==='pt').length;
   return `${ENGINE_RULES}
 
@@ -895,7 +994,9 @@ ${plan}
 TRIGGERED MODULES AVAILABLE (not yet added):
 ${off}
 CURRENT MODULE: ${it.current}
-QUESTIONNAIRES: ${qs}
+QUESTIONNAIRES:
+${qs}
+${cssrsText(it)}
 RISK SO FAR: ${it.risk?.level||'none'}${it.risk?.summary?' — '+it.risk.summary:''}
 FACTS RECORDED: ${(it.facts||[]).map(f=>`[${f.module}] ${f.text}`).join('; ')||'none'}
 CONTRADICTIONS RECORDED: ${(it.contradictions||[]).map(c=>c.text).join('; ')||'none'}
@@ -972,13 +1073,14 @@ function qcardHTML(qid){
     <div class="qitem"><span>${esc(Q.diff)}</span><div class="qopts">${DIFF.map((o,v)=>`<button data-d="${v}" class="${d.diff===v?'on':''}" aria-pressed="${d.diff===v}">${esc(o)}</button>`).join('')}</div></div>
     <div class="row"><button class="btn ghost sm" id="qskip">I'd rather discuss this in person</button><div class="spacer"></div><span class="small muted" id="qleft"></span><button class="btn primary" id="qsubmit">Submit</button></div></div>`;
 }
-function wireQ(){
-  const qid = S.pendingQ, Q = QS[qid], d = S.qDraft, card = $('#qcard');
+function wireQ(qidArg, mode){
+  const qid = qidArg || S.pendingQ, Q = QS[qid], d = S.qDraft, card = $('#qcard');
   const upd = ()=>{ const left = d.items.filter(v=>v===null).length; $('#qleft').textContent = left ? `${left} left` : ''; $('#qsubmit').disabled = left>0; };
   $$('button[data-i]', card).forEach(b=>b.onclick=()=>{ d.items[+b.dataset.i]=+b.dataset.v; $$(`button[data-i="${b.dataset.i}"]`,card).forEach(x=>{x.classList.toggle('on',x===b); x.setAttribute('aria-pressed',x===b);}); upd(); });
   $$('button[data-d]', card).forEach(b=>b.onclick=()=>{ d.diff=+b.dataset.d; $$('button[data-d]',card).forEach(x=>{x.classList.toggle('on',x===b); x.setAttribute('aria-pressed',x===b);}); });
   upd();
   $('#qsubmit').onclick = ()=>{
+    if(mode==='screen'){ saveScreenQ(qid, d); return; }
     const it = S.pt, total = d.items.reduce((a,b)=>a+b,0), diff = d.diff===null ? '' : DIFF[d.diff];
     it.q = Object.assign({}, it.q, {[qid]:{items:d.items.slice(), total, diff, ts:now()}});
     it.transcript.push({r:'sys', t:`${Q.name} completed: total ${total} (${band(Q,total)}).${qid==='phq9'?` Item 9: ${OPTS4[d.items[8]]} (${d.items[8]}).`:''}${diff?` Difficulty: ${diff}.`:''}`, m:it.current, ts:now()});
@@ -990,6 +1092,7 @@ function wireQ(){
     else { if(pend) it.transcript.push(pend); persist(it.id,{transcript:it.transcript}); render(); }
   };
   $('#qskip').onclick = ()=>{
+    if(mode==='screen'){ skipScreen(qid); return; }
     const it = S.pt; it.qSkipped = (it.qSkipped||[]).concat([qid]);
     it.transcript.push({r:'sys', t:`Patient chose to discuss the ${Q.name} questionnaire at the visit instead.`, m:it.current, ts:now()});
     const pend = S.pendingReply; S.pendingQ=null; S.pendingReply=null; S.qDraft=null;
