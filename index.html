@@ -366,7 +366,10 @@ const aiErr = code => ({
   session_expired:'Your session expired. Sign in again, then try again.',
   refused:'The assistant could not answer that. Try rephrasing.',
   invalid_json:'The assistant returned something unreadable. Try again.',
-  cancelled:'Stopped.'
+  cancelled:'Stopped.',
+  bad_key:'The API key was rejected. Check it under AI setup.',
+  bad_model:'That model name was not recognized. Check it under AI setup.',
+  network:'Could not reach Anthropic. Check your connection and try again.'
 }[code] || 'The assistant could not respond. Try again.');
 
 /* ---------- State ---------- */
@@ -397,6 +400,7 @@ function route(){
   let m;
   if(!h || h==='intakes'){ S.view='list'; S.id=null; }
   else if(h==='new'){ S.view='new'; }
+  else if(h==='setup' && STANDALONE){ S.view='setup'; }
   else if((m=h.match(/^i-([a-z0-9-]+)$/))){ if(S.id!==m[1]){ S.tab='overview'; S.src=null; } S.view='detail'; S.id=m[1]; }
   else if((m=h.match(/^p-([a-z0-9-]+)$/))){ if(S.view!=='patient' || S.id!==m[1]){ S.pt=null; S.ptPhase=null; S.ptErr=null; S.crisis=false; S.pendingQ=null; S.pendingReply=null; } S.view='patient'; S.id=m[1]; }
   else { S.view='list'; }
@@ -417,12 +421,14 @@ function render(fromData){
       <div class="brand"><b>Anamnesis</b><span>prototype</span></div>
       <a class="nav ${S.view==='list'||S.view==='detail'?'on':''}" href="#intakes">Intakes</a>
       <a class="nav ${S.view==='new'?'on':''}" href="#new">New intake</a>
+      ${STANDALONE?`<a class="nav ${S.view==='setup'?'on':''}" href="#setup">AI setup</a>`:''}
       <div class="foot">Fictional patients only. Not for real health information.</div>
     </aside>
     <main class="main"><div class="wrap" id="view"></div></main>
   </div>`;
   const v = $('#view');
   const notes = [];
+  if(STANDALONE && !S.sample && S.view!=='setup') notes.push('Running in your browser. <a href="#setup">Add an Anthropic API key</a> to turn on the AI.');
   if(S.offline) notes.push('Saving is unavailable in this view, so intakes last only until you reload.');
   if(S.loadErr) notes.push('Saved intakes could not be loaded ('+esc(S.loadErr)+').');
   if(!S.loaded && !S.offline) notes.push('Loading saved intakes…');
@@ -430,6 +436,7 @@ function render(fromData){
   if(S.view==='list') renderList(v);
   else if(S.view==='new') renderNew(v);
   else if(S.view==='detail') renderDetail(v);
+  else if(S.view==='setup') renderSetup(v);
 }
 document.addEventListener('focusout', ()=>{ setTimeout(()=>{ if(S.deferRender){ const a=document.activeElement; if(!(a && (a.isContentEditable || /TEXTAREA|INPUT|SELECT/.test(a.tagName)))) render(); } }, 50); });
 
@@ -996,15 +1003,133 @@ const CAP = {};
 async function getSample(){ if(S.sample) return S.sample; return CAP.sample ? await CAP.sample : null; }
 const noAIMsg = () => window.claude
   ? 'Claude could not be reached from this view. Reload the page. If it keeps happening, open the artifact on claude.ai in a desktop browser.'
-  : 'This copy of the page is running outside Claude (for example from GitHub), so the AI cannot run here. Open the Anamnesis artifact in Claude instead.';
+  : 'The AI is off until you add an Anthropic API key under AI setup.';
+
+/* ---------- Browser mode (outside Claude): own API key, local storage, Web Speech ---------- */
+const STANDALONE = !window.claude;
+const LS = {get(k){ try{ return localStorage.getItem(k); }catch{ return null; } }, set(k,v){ try{ v==null ? localStorage.removeItem(k) : localStorage.setItem(k,v); }catch{} }};
+const getKey = () => LS.get('anamnesis-key');
+const getModel = () => LS.get('anamnesis-model') || 'claude-sonnet-5-5';
+function parseLoose(t){
+  const tries = [t, (t.match(/```(?:json)?\s*([\s\S]*?)```/)||[])[1]];
+  const a = t.search(/[\[{]/), b = Math.max(t.lastIndexOf('}'), t.lastIndexOf(']'));
+  if(a>=0 && b>a) tries.push(t.slice(a,b+1));
+  for(const s of tries){ if(!s) continue; try{ return JSON.parse(s); }catch{} }
+  return undefined;
+}
+function apiSample(key){
+  const call = async (input, opts={}) => {
+    const messages = typeof input==='string' ? [{role:'user', content:input}] : input;
+    let r;
+    try{
+      r = await fetch('https://api.anthropic.com/v1/messages', {method:'POST', signal:opts.signal,
+        headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({model:getModel(), max_tokens:opts.maxTokens||8000, messages})});
+    }catch(e){ throw {code: e && e.name==='AbortError' ? 'cancelled' : 'network', message:String(e)}; }
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok){
+      const msg = j?.error?.message || ('HTTP '+r.status);
+      const code = r.status===401 || r.status===403 ? 'bad_key' : (r.status===429 || r.status===529) ? 'rate_limited' : ((r.status===404 || r.status===400) && /model/i.test(msg)) ? 'bad_model' : 'upstream_error';
+      throw {code, message:msg};
+    }
+    const text = (j.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+    if(!text.trim()) throw {code:'empty_completion'};
+    return {text, truncated: j.stop_reason==='max_tokens'};
+  };
+  call.json = async (input, opts={}) => {
+    const add = '\n\nYour reply is read by a program: reply with only the JSON value, no other text.';
+    const {text, truncated} = await call(typeof input==='string' ? input+add : input, opts);
+    const v = parseLoose(text);
+    if(v===undefined || truncated) throw {code:'invalid_json', text};
+    return v;
+  };
+  return call;
+}
+function deepMerge(a, b){
+  const out = Object.assign({}, a);
+  for(const [k,v] of Object.entries(b||{})) out[k] = (v && typeof v==='object' && !Array.isArray(v) && out[k] && typeof out[k]==='object' && !Array.isArray(out[k])) ? deepMerge(out[k], v) : v;
+  return out;
+}
+function localDB(){
+  const KEY = 'anamnesis-intakes', listeners = [];
+  const read = () => { try{ return JSON.parse(localStorage.getItem(KEY)||'{}'); }catch{ return {}; } };
+  const snap = m => ({metadata:{fromCache:false, hasPendingWrites:false}, docs:Object.entries(m).map(([id,d])=>({id, exists:true, data:()=>d}))});
+  const write = m => { try{ localStorage.setItem(KEY, JSON.stringify(m)); }catch{ toast('This browser would not save the intake. Storage may be full or blocked.'); } const s=snap(m); listeners.forEach(f=>f(s)); };
+  return {
+    collection: () => ({ onSnapshot(next){ listeners.push(next); setTimeout(()=>next(snap(read())), 0); return ()=>{ const i=listeners.indexOf(next); if(i>=0) listeners.splice(i,1); }; } }),
+    doc: path => { const id = path.split('/')[1]; return {
+      async set(d){ const m=read(); m[id]=d; write(m); },
+      async update(p){ const m=read(); m[id]=deepMerge(m[id]||{}, p); write(m); },
+      async delete(){ const m=read(); delete m[id]; write(m); } }; }
+  };
+}
+function webSpeech(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition; if(!SR) return null;
+  let rec = null; const cb = {p:()=>{}, f:()=>{}, s:()=>{}};
+  return {
+    onPartial(f){ cb.p=f; }, onFinal(f){ cb.f=f; }, onState(f){ cb.s=f; },
+    start(){ return new Promise((res, rej)=>{
+      rec = new SR(); rec.lang = 'en-CA'; rec.interimResults = true; rec.continuous = true;
+      rec.onstart = ()=>{ cb.s({state:'listening'}); res(); };
+      rec.onresult = e=>{ let interim=''; for(let i=e.resultIndex;i<e.results.length;i++){ const r=e.results[i]; if(r.isFinal) cb.f({text:r[0].transcript.trim()}); else interim += r[0].transcript; } cb.p({text:interim}); };
+      rec.onerror = e=>{ if(e.error==='not-allowed' || e.error==='service-not-allowed') rej({code:'not_granted'}); };
+      rec.onend = ()=>{ cb.s({state:'idle', reason:'stopped'}); rec=null; };
+      try{ rec.start(); }catch{ rej({code:'failed'}); }
+    }); },
+    async stop(){ if(rec) rec.stop(); }
+  };
+}
+function renderSetup(v){
+  const k = getKey();
+  v.insertAdjacentHTML('beforeend', `<div><h1>AI setup</h1><p class="muted">This copy runs in your browser. The interviewer, note and letters call Anthropic's API with your own key.</p></div>
+  <form class="card" id="keyForm">
+    <div class="field"><label for="k-key">Anthropic API key</label><span class="hint">Create one at console.anthropic.com. It is saved only in this browser and sent only to api.anthropic.com.</span>
+      <input type="password" id="k-key" autocomplete="off" placeholder="${k ? 'Saved key ending ' + esc(k.slice(-4)) : 'sk-ant-…'}"></div>
+    <div class="field"><label for="k-model">Model</label><span class="hint">Any Claude API model id.</span><input type="text" id="k-model" value="${esc(getModel())}"></div>
+    <div class="row"><button class="btn primary" type="submit">Save and test</button>${k?'<button class="btn danger" type="button" id="k-clear">Remove key</button>':''}<span class="small" id="k-status">${S.sample?'AI is on.':'AI is off.'}</span></div>
+  </form>
+  <div class="card"><h2>Before you use it</h2><ul class="small">
+    <li>Anyone using this browser can use the saved key. Don't save it on a shared computer.</li>
+    <li>Use made-up patients only. Answers are sent to Anthropic's API and kept in this browser's storage.</li>
+    <li>Intakes live in this browser only. Clearing site data deletes them, and other devices won't see them.</li>
+    <li>Each patient answer costs one API call; a full interview is usually 40 to 60 calls.</li></ul>
+    <div class="row"><button class="btn" type="button" id="k-seed">Load sample case (Morgan Tse)</button></div></div>`);
+  $('#keyForm').onsubmit = async e=>{
+    e.preventDefault();
+    const key = $('#k-key').value.trim() || getKey(), model = $('#k-model').value.trim();
+    const st = $('#k-status');
+    if(!key){ st.textContent = 'Paste a key first.'; return; }
+    LS.set('anamnesis-model', model || null);
+    st.textContent = 'Testing…';
+    const s = apiSample(key);
+    try{ const r = await s.json('Reply with only {"ok":true}', {maxTokens:50}); if(!r || r.ok!==true) throw {code:'invalid_json'};
+      LS.set('anamnesis-key', key); S.sample = s; CAP.sample = Promise.resolve(s); $('#k-key').value=''; st.textContent = 'Saved. AI is on.'; toast('AI is on');
+    }catch(err){ st.textContent = aiErr(err && err.code) + (err && err.message ? ' (' + err.message + ')' : ''); }
+  };
+  const c = $('#k-clear'); if(c) c.onclick = ()=>{ LS.set('anamnesis-key', null); S.sample = null; CAP.sample = Promise.resolve(null); render(); toast('Key removed'); };
+  $('#k-seed').onclick = async ()=>{
+    try{ const r = await fetch('seed/demo-morgan.json'); if(!r.ok) throw 0; const d = await r.json(); createIntake(d); toast('Sample case added'); go('i-'+d.id); }
+    catch{ toast('Could not load the sample case. It is in seed/demo-morgan.json in the repo.'); }
+  };
+}
+
 async function init(){
   window.addEventListener('hashchange', route);
   route();
+  if(STANDALONE){
+    const k = getKey(); S.sample = k ? apiSample(k) : null; CAP.sample = Promise.resolve(S.sample);
+    S.dict = webSpeech(); setupDictation();
+    S.db = localDB(); subscribe(S.db);
+    return;
+  }
   CAP.sample = use('sample').then(s=>{ S.sample = s; return s; });
   use('dictation').then(d=>{ S.dict = d; setupDictation(); if(d && S.view!=='patient') render(true); });
   const db = await use('db');
   if(!db){ S.offline=true; S.loaded=true; render(); return; }
   S.db = db;
+  subscribe(db);
+}
+function subscribe(db){
   const timer = setTimeout(()=>{ if(!S.loaded){ S.loadErr='taking longer than usual'; render(); } }, 10000);
   db.collection('intakes').onSnapshot(snap=>{
     if(!snap.metadata.fromCache) clearTimeout(timer);

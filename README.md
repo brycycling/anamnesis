@@ -21,15 +21,21 @@ Prototype of an automated psychiatric intake workflow, modelled on the referral-
 
 ## Running it
 
-`index.html` is a single self-contained page. It was built as a claude.ai Artifact and uses three Artifact runtime capabilities:
+### In a browser (GitHub Pages)
 
-| Capability | Used for |
-| --- | --- |
-| `sample` | the AI interviewer, note drafting and letter drafting |
-| `db` | storing intakes (collection `intakes`) |
-| `dictation` | tap-to-talk for patients and the clinician's plan |
+1. Open **https://brycycling.github.io/anamesis/**
+2. Go to **AI setup**, paste an Anthropic API key (from console.anthropic.com) and click **Save and test**.
+3. Click **Load sample case** to try the note and letters, or **New intake** to run an interview.
 
-Opened outside claude.ai (e.g. a local file or GitHub Pages) the page loads, but the AI features are unavailable and intakes last only until reload. A production version would replace these with a backend: an LLM API call per turn, a Canadian-hosted database, and authenticated patient links.
+In this mode the page calls Anthropic's API directly from the browser with your key, stores intakes in the browser's local storage, and uses Chrome's speech recognition for dictation. The key and intakes never leave that browser except for the API calls. Don't save a key on a shared computer. Running locally works too: serve the folder (`python3 -m http.server`) and open `http://localhost:8000`.
+
+### Inside Claude
+
+Published as a claude.ai Artifact, the same file uses Artifact runtime capabilities instead: `sample` (AI on the viewer's Claude account), `db` (shared storage, collection `intakes`) and `dictation`. No API key is needed there.
+
+### Production
+
+Neither mode is suitable for real patients. A production version needs a backend that holds the API key, authenticated per-patient links, and a Canadian-hosted database with encryption and audit logging.
 
 ## Files
 
