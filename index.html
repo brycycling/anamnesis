@@ -575,7 +575,7 @@ function checkNote(it, note){
 }
 async function draftNote(id){
   const it = S.intakes[id]; if(!it || S.busy[id]) return;
-  if(!S.sample){ toast('Drafting needs Claude access, which this view does not have.'); return; }
+  if(!(await getSample())){ toast(noAIMsg()); return; }
   S.busy[id]='note'; render();
   const tx = (it.transcript||[]).map((t,i)=>`[${i} ${t.r.toUpperCase()} ${t.m||''}] ${t.t}`).join('\n');
   const qs = ['phq9','gad7'].map(k=>{ const r=it.q?.[k]; return r ? `${QS[k].name}: total ${r.total}/${QS[k].max} (${band(QS[k],r.total)}); items ${r.items.join(',')}${k==='phq9'?`; item 9 = ${r.items[8]}`:''}; difficulty: ${r.diff||'not answered'}` : `${QS[k].name}: not completed`; }).join('\n');
@@ -680,7 +680,7 @@ function wireSrcPanel(it){ const o=$('#openTurn'); if(o){ const [k,si,j,x]=S.src
 /* ---------- Letters ---------- */
 async function draftLetters(id){
   const it = S.intakes[id]; if(!it || S.busy[id]) return;
-  if(!S.sample){ toast('Drafting needs Claude access, which this view does not have.'); return; }
+  if(!(await getSample())){ toast(noAIMsg()); return; }
   S.busy[id]='letters'; render();
   const noteText = (it.note.sections||[]).map(s=>`${s.title}:\n${(s.statements||[]).map(x=>'- '+x.text).join('\n')}`).join('\n\n');
   const prompt = `${LETTER_RULES}
@@ -902,8 +902,8 @@ The newest turn is ${it.transcript.length-1}. Decide the next single question an
 
 async function aiTurn(retried){
   const it = S.pt;
-  if(!S.sample){ S.ptErr = 'The live interviewer needs Claude access, which this view does not have. Open the page inside Claude to run it.'; render(); return; }
   S.ptBusy = true; S.ptErr = null; render();
+  if(!(await getSample())){ S.ptBusy = false; S.ptErr = noAIMsg(); render(); return; }
   let res;
   try{
     res = await S.sample.json(enginePrompt(it, retried), {modelTier:'default', effort:'low', cache:false});
@@ -992,11 +992,17 @@ function wireQ(){
 }
 
 /* ---------- Boot ---------- */
+const CAP = {};
+async function getSample(){ if(S.sample) return S.sample; return CAP.sample ? await CAP.sample : null; }
+const noAIMsg = () => window.claude
+  ? 'Claude could not be reached from this view. Reload the page. If it keeps happening, open the artifact on claude.ai in a desktop browser.'
+  : 'This copy of the page is running outside Claude (for example from GitHub), so the AI cannot run here. Open the Anamnesis artifact in Claude instead.';
 async function init(){
   window.addEventListener('hashchange', route);
   route();
-  const [db, sample, dict] = await Promise.all([use('db'), use('sample'), use('dictation')]);
-  S.sample = sample; S.dict = dict; setupDictation();
+  CAP.sample = use('sample').then(s=>{ S.sample = s; return s; });
+  use('dictation').then(d=>{ S.dict = d; setupDictation(); if(d && S.view!=='patient') render(true); });
+  const db = await use('db');
   if(!db){ S.offline=true; S.loaded=true; render(); return; }
   S.db = db;
   const timer = setTimeout(()=>{ if(!S.loaded){ S.loadErr='taking longer than usual'; render(); } }, 10000);
